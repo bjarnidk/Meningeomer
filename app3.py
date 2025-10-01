@@ -1,32 +1,33 @@
+import os
+import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
-import joblib
 
 # -----------------------------
-# App config
+# Config
 # -----------------------------
-st.set_page_config(page_title="Meningioma Risk (15y intervention)", layout="wide")
-st.title("Meningioma 15-Year Intervention Risk")
-st.caption("Random Forest (isotonic calibrated). Trained on Center A, validated on Center B. "
-           "CIs from pooled A+B; observed rates from Center B and A+B.")
+st.set_page_config(page_title="Meningioma 15y Intervention Risk", layout="wide")
+
+ARTIFACT_PATH = "meningioma_rf_model.joblib"
 
 # -----------------------------
 # Load artifact
 # -----------------------------
 @st.cache_resource
-def load_artifact(path="meningioma_rf_model.joblib"):
+def load_artifact(path):
     return joblib.load(path)
 
-artifact = load_artifact()
+artifact = load_artifact(ARTIFACT_PATH)
 model = artifact["calibrated_model"]
 feature_names = artifact["feature_names"]
 train_ranges = artifact["train_ranges"]
-valB = artifact.get("validation_B", {})
-valAB = artifact.get("validation_AB", {})
+
+validation_B = artifact["validation_B"]
+validation_AB = artifact.get("validation_AB", None)
 
 # -----------------------------
-# Predict helper
+# Helpers
 # -----------------------------
 def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, edema, feature_names):
     row = {
@@ -39,6 +40,7 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
         "edema": int(edema),
     }
     row_df = pd.DataFrame([row])
+    # location dummies
     for c in feature_names:
         if c.startswith("location_"):
             row_df[c] = 0
@@ -50,82 +52,80 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
             row_df[c] = 0
     return row_df[feature_names]
 
-# -----------------------------
-# Bin lookup (safe)
-# -----------------------------
 def lookup_bins(prob, bins):
-    if not bins: 
+    """Match prob into calibration bins without boundary gaps."""
+    if not bins:
         return None
-    chosen = None
-    for b in bins:
-        if prob >= b["p_min"] and prob <= b["p_max"]:
-            chosen = b
-            break
-    if chosen is None:
-        diffs = [abs(prob - b["mean_pred"]) for b in bins]
-        chosen = bins[int(np.argmin(diffs))]
-    return chosen
+    for i, b in enumerate(bins):
+        if i < len(bins) - 1:
+            if prob >= b["p_min"] and prob < b["p_max"]:
+                return b
+        else:  # last bin, inclusive
+            if prob >= b["p_min"] and prob <= b["p_max"]:
+                return b
+    # fallback: closest mean_pred
+    diffs = [abs(prob - b["mean_pred"]) for b in bins]
+    return bins[int(np.argmin(diffs))]
 
 # -----------------------------
-# UI inputs
+# UI
 # -----------------------------
-st.header("Interactive prediction")
+st.title("Meningioma 15-Year Intervention Risk")
+st.caption("Random Forest (isotonic calibrated). Trained on Center A, validated on Center B. Risk is probability of intervention within 15 years.")
 
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 with col1:
-    age_input = st.number_input("Age (years)", 18, 110, 65, 1)
-    size_input = st.number_input("Tumor size (mm)", 1, 100, 30, 1)
+    age_input = st.number_input("Age (years)", min_value=18, max_value=100, value=65, step=1)
+    size_input = st.number_input("Tumor size (mm)", min_value=1, max_value=100, value=30, step=1)
+    loc_levels = ["(baseline)"] + artifact["location_levels"]
+    sel_loc = st.selectbox("Location", loc_levels, index=0)
 
 with col2:
-    loc_levels = ["(baseline)"] + artifact.get("location_levels", [])
-    sel_loc = st.selectbox("Location", options=loc_levels, index=0)
-
-with col3:
     epilepsi_in  = st.selectbox("Epilepsi", [0, 1], index=0)
     tryk_in       = st.selectbox("Tryksympt", [0, 1], index=0)
     focal_in      = st.selectbox("Focalsympt", [0, 1], index=0)
     calcified_in  = st.selectbox("Calcified", [0, 1], index=1)
     edema_in      = st.selectbox("Edema", [0, 1], index=0)
 
-# -----------------------------
+# Build row
+row_df = make_row(age_input, size_input, sel_loc if sel_loc != "(baseline)" else "BASELINE",
+                  epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
+
 # Predict
-# -----------------------------
-row_df = make_row(age_input, size_input,
-                  sel_loc if sel_loc != "(baseline)" else "BASELINE",
-                  epilepsi_in, tryk_in, focal_in, calcified_in, edema_in,
-                  feature_names)
+with st.spinner("Predicting..."):
+    p = float(model.predict_proba(row_df)[:, 1][0])
 
-p = float(model.predict_proba(row_df)[:, 1][0])
-risk_pct = 100 * p
+risk_pct = p * 100.0
 
 # -----------------------------
-# Lookup bins
+# CI via pooled bins
 # -----------------------------
-bin_AB = lookup_bins(p, valAB.get("reliability_bins", []))  # pooled A+B for CI + obs
-bin_B  = lookup_bins(p, valB.get("reliability_bins", []))   # external B for obs only
+ci_txt = ""
+bin_B, bin_AB = None, None
+
+if "reliability_bins" in validation_B:
+    bin_B = lookup_bins(p, validation_B["reliability_bins"])
+if validation_AB and "reliability_bins" in validation_AB:
+    bin_AB = lookup_bins(p, validation_AB["reliability_bins"])
+    if bin_AB:
+        ci_low = bin_AB["obs_rate_ci_low"] * 100
+        ci_high = bin_AB["obs_rate_ci_high"] * 100
+        ci_txt = f"(95% CI {ci_low:.1f}–{ci_high:.1f}%)"
 
 # -----------------------------
-# Render results
+# Display
 # -----------------------------
 st.subheader("Estimated probability of intervention within 15 years")
+st.metric(label="Risk", value=f"{risk_pct:.1f}% {ci_txt}")
 
-if bin_AB:
-    ci_low = bin_AB['ci_low']*100
-    ci_high = bin_AB['ci_high']*100
-    st.write(f"**Risk: {risk_pct:.1f}% (95% CI {ci_low:.1f}–{ci_high:.1f}%)**")
-else:
-    st.write(f"**Risk: {risk_pct:.1f}%**")
-
-# Always show both observed rates if available
 if bin_B:
     st.caption(
-        f"External reliability (Center B): observed {bin_B['obs_rate']*100:.1f}% "
+        f"Observed in Center B: {bin_B['obs_rate']*100:.1f}% "
         f"(n={bin_B['n']}) in this risk band."
     )
-
 if bin_AB:
     st.caption(
-        f"Pooled reliability (Centers A+B): observed {bin_AB['obs_rate']*100:.1f}% "
+        f"Observed in pooled A+B: {bin_AB['obs_rate']*100:.1f}% "
         f"(n={bin_AB['n']}) in this risk band."
     )
 
@@ -134,11 +134,10 @@ if bin_AB:
 # -----------------------------
 with st.expander("Model card / notes"):
     st.markdown(f"""
-- **Model:** {artifact['model_type']}  
-- **Calibration:** Isotonic (5-fold CV)  
-- **Training:** Center A  
-- **External validation (Center B):** AUC ≈ {valB.get('auc', None):.3f}, Brier ≈ {valB.get('brier', None):.3f}  
-- **Reliability:** CI + pooled observed rate from A+B; external observed rate from B only.  
-- **Use case:** Rule-out follow-up MRI for incidental meningioma at very low risk.  
-- **Caveats:** Out-of-distribution inputs reduce reliability; use alongside clinical judgment.
+- **Model:** {artifact['model_type']}
+- **External validation (B):** AUC = {validation_B['auc']:.3f}, Brier = {validation_B['brier']:.3f}  
+- **Observed reliability:** Above numbers are from calibration bins.  
+- **CI:** Based on pooled A+B observed rates (bootstrap Wilson).  
+- **Use case:** Estimating risk of intervention for incidental meningioma.  
+- **Caution:** Clinical judgment required; predictions may be unstable at edges of training distribution.
 """)
