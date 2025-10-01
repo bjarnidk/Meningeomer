@@ -2,11 +2,13 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
 from pathlib import Path
+from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(page_title="Meningioma 15y Intervention Risk", layout="wide")
 st.title("Meningioma 15-Year Intervention Risk (Frozen Model)")
-st.caption("Random Forest with isotonic calibration. Trained on Center A; validated on Center B.")
+st.caption("Random Forest with isotonic calibration. Trained on Center A (tumor size in mm); validated on Center B.")
 
 # -----------------------------
 # Load artifact
@@ -20,7 +22,7 @@ artifact = joblib.load(ARTIFACT_PATH)
 model = artifact["calibrated_model"]
 feature_names = artifact["feature_names"]
 train_ranges = artifact["train_ranges"]
-location_levels = artifact["location_levels"]  # raw labels (no 'location_' prefix)
+location_levels = artifact["location_levels"]
 valB = artifact["validation_B"]
 feature_importances = artifact.get("feature_importances", None)
 
@@ -67,6 +69,15 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
             row_df[c] = 0
     row_df = row_df[feature_names]
     return row_df
+
+def tree_variance(model, row_df):
+    """Compute variance across RF trees for one prediction (proxy for internal uncertainty)."""
+    try:
+        rf = model.base_estimator  # RF inside calibrator
+        tree_preds = np.array([tree.predict_proba(row_df)[:, 1][0] for tree in rf.estimators_])
+        return float(tree_preds.var()), float(tree_preds.std())
+    except Exception:
+        return None, None
 
 # -----------------------------
 # Performance summary (from artifact)
@@ -122,8 +133,11 @@ if sel_loc != "(baseline)":
 row_df = make_row(age_input, size_mm, sel_loc, epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
 p = float(model.predict_proba(row_df)[:, 1][0])  # calibrated probability
 risk_pct = p * 100
+var, std = tree_variance(model, row_df)
 
-# Risk band
+# -----------------------------
+# Risk display
+# -----------------------------
 if p <= low_risk_cut:
     band = "Very low"
 elif p <= 0.15:
@@ -137,6 +151,8 @@ left, right = st.columns([1.2, 1])
 with left:
     st.subheader("Estimated probability of intervention within 15 years")
     st.metric(label="Risk (calibrated)", value=f"{risk_pct:.1f}%")
+    if std is not None:
+        st.caption(f"Model internal uncertainty (tree std): ±{std*100:.1f}%")
     st.write(f"**Risk band:** {band}  |  **Policy t:** {policy_t:.2f}  |  **Very-low cut:** ≤ {low_risk_cut:.2f}")
 
     pred_at_t = int(p >= policy_t)
@@ -159,6 +175,25 @@ with right:
         st.info("All inputs within training distribution & known categories.")
 
 # -----------------------------
+# Calibration curve display
+# -----------------------------
+with st.expander("Calibration curve (Center B)"):
+    bins = valB.get("calibration_bins", [])
+    if bins:
+        mp = [b["mean_pred"] for b in bins]
+        fp = [b["frac_pos"] for b in bins]
+        fig, ax = plt.subplots()
+        ax.plot(mp, fp, "o-", label="Observed")
+        ax.plot([0,1],[0,1],"--", color="gray", label="Perfect calibration")
+        ax.set_xlabel("Mean predicted probability")
+        ax.set_ylabel("Observed fraction of positives")
+        ax.set_title("Calibration (Center B)")
+        ax.legend()
+        st.pyplot(fig)
+    else:
+        st.info("No calibration bins stored in artifact.")
+
+# -----------------------------
 # Model card / notes
 # -----------------------------
 with st.expander("Model card / notes"):
@@ -168,6 +203,9 @@ with st.expander("Model card / notes"):
 - **External validation (Center B):** AUC ≈ {valB['auc']:.3f}, Brier ≈ {valB['brier']:.3f}
 - **Variables:** age, tumorsize (mm, continuous); location (categorical); epilepsi, tryksympt, focalsympt, calcified, edema (binary).
 - **Calibration:** Isotonic (5-fold CV).
+- **Uncertainty:** 
+    - Internal model disagreement (tree std) shown per patient.
+    - Historical calibration curve from Center B included for reliability.
 - **Intended use:** Rule-out follow-up MRI when risk is very low (e.g., ≤ {low_risk_cut:.2f}). Use alongside clinical judgment.
 - **Guardrails:** OOD warnings for age/size out of range or unseen location.
 """)
