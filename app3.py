@@ -6,12 +6,12 @@ from pathlib import Path
 
 st.set_page_config(page_title="Meningioma 15y Intervention Risk", layout="wide")
 st.title("Meningioma 15-Year Intervention Risk (Frozen Model)")
-st.caption("Random Forest with isotonic calibration. Trained on Center A; validated on Center B. This app loads a saved model artifact.")
+st.caption("Random Forest with isotonic calibration. Trained on Center A (tumor size in mm); validated on Center B.")
 
 # -----------------------------
 # Load artifact
 # -----------------------------
-ARTIFACT_PATH = Path("meningioma_rf_model.joblib")  # ensure this file is in the app folder
+ARTIFACT_PATH = Path("meningioma_rf_model.joblib")  # ensure this file is in the same folder
 if not ARTIFACT_PATH.exists():
     st.error(f"Model artifact not found at {ARTIFACT_PATH.resolve()}. Upload the .joblib file to this folder.")
     st.stop()
@@ -24,6 +24,9 @@ location_levels = artifact["location_levels"]  # raw labels (no 'location_' pref
 valB = artifact["validation_B"]
 feature_importances = artifact.get("feature_importances", None)
 
+# Model expects mm
+st.info("📏 Tumor size is expected in **millimeters (mm)** — this matches the training data.")
+
 # -----------------------------
 # Sidebar: policy settings
 # -----------------------------
@@ -34,10 +37,11 @@ low_risk_cut = st.sidebar.slider("Very-low risk band (rule-out candidate)", 0.00
 # -----------------------------
 # Helpers
 # -----------------------------
-def make_row(age, size, location_value, epilepsi, tryk, focal, calcified, edema, feature_names):
+def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, edema, feature_names):
+    """Build one-hot encoded row for prediction. size must be in mm (as per training)."""
     row = {
         "age": age,
-        "tumorsize": size,
+        "tumorsize": size_mm,
         "epilepsi": int(epilepsi),
         "tryksympt": int(tryk),
         "focalsympt": int(focal),
@@ -74,7 +78,7 @@ with st.expander("Validation summary (Center B)"):
     st.write("Threshold trade-offs (Center B):")
     st.dataframe(pd.DataFrame(valB["threshold_table"]))
 
-# Optional: top features (if available)
+# Optional: top features
 if feature_importances:
     st.subheader("Top features (training model importance)")
     fi = pd.Series(feature_importances).sort_values(ascending=False)
@@ -88,7 +92,7 @@ st.header("Patient risk calculator")
 col1, col2, col3 = st.columns(3)
 with col1:
     age_input = st.number_input("Age (years)", min_value=18, max_value=110, value=65, step=1)
-    size_input = st.number_input("Tumor size (cm)", min_value=0.1, max_value=10.0, value=3.0, step=0.1, format="%.1f")
+    size_mm = st.number_input("Tumor size (mm)", min_value=1, max_value=200, value=30, step=1)
 with col2:
     loc_options = ["(baseline)"] + location_levels
     sel_loc = st.selectbox("Location", options=loc_options, index=0)
@@ -99,19 +103,23 @@ with col3:
     calcified_in = st.selectbox("Calcified",  [0, 1], index=1)
     edema_in     = st.selectbox("Edema",      [0, 1], index=0)
 
+# -----------------------------
 # OOD guardrails
+# -----------------------------
 ood_msgs = []
 if age_input < train_ranges["age_min"] or age_input > train_ranges["age_max"]:
-    ood_msgs.append(f"Age outside training range [{train_ranges['age_min']:.0f}, {train_ranges['age_max']:.0f}]")
-if size_input < train_ranges["size_min"] or size_input > train_ranges["size_max"]:
-    ood_msgs.append(f"Tumor size outside training range [{train_ranges['size_min']:.1f}, {train_ranges['size_max']:.1f}]")
+    ood_msgs.append(f"Age outside training range [{train_ranges['age_min']:.0f}, {train_ranges['age_max']:.0f}] years")
+if size_mm < train_ranges["size_min"] or size_mm > train_ranges["size_max"]:
+    ood_msgs.append(f"Tumor size outside training range [{train_ranges['size_min']:.0f}, {train_ranges['size_max']:.0f}] mm")
 if sel_loc != "(baseline)":
     chosen_dummy = f"location_{sel_loc}"
     if chosen_dummy not in feature_names:
         ood_msgs.append(f"Unseen location level: {sel_loc}")
 
+# -----------------------------
 # Build row & predict
-row_df = make_row(age_input, size_input, sel_loc, epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
+# -----------------------------
+row_df = make_row(age_input, size_mm, sel_loc, epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
 p = float(model.predict_proba(row_df)[:, 1][0])  # calibrated probability
 risk_pct = p * 100
 
@@ -150,12 +158,15 @@ with right:
     else:
         st.info("All inputs within training distribution & known categories.")
 
+# -----------------------------
+# Model card / notes
+# -----------------------------
 with st.expander("Model card / notes"):
     st.markdown(f"""
 - **Model:** {artifact['model_type']}
-- **Training:** Center A only (frozen)
+- **Training:** Center A only (frozen). Tumor size in **mm**.
 - **External validation (Center B):** AUC ≈ {valB['auc']:.3f}, Brier ≈ {valB['brier']:.3f}
-- **Variables:** age, tumorsize (continuous); location (categorical); epilepsi, tryksympt, focalsympt, calcified, edema (binary).
+- **Variables:** age, tumorsize (mm, continuous); location (categorical); epilepsi, tryksympt, focalsympt, calcified, edema (binary).
 - **Calibration:** Isotonic (5-fold CV).
 - **Intended use:** Rule-out follow-up MRI when risk is very low (e.g., ≤ {low_risk_cut:.2f}). Use alongside clinical judgment.
 - **Guardrails:** OOD warnings for age/size out of range or unseen location.
