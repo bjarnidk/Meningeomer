@@ -9,7 +9,7 @@ import joblib
 st.set_page_config(page_title="Meningioma Risk (15y intervention)", layout="wide")
 st.title("Meningioma 15-Year Intervention Risk")
 st.caption("Random Forest (isotonic calibrated). Trained on Center A, validated on Center B. "
-           "CIs from pooled A+B for stability; observed reliability from Center B for transparency.")
+           "CIs from pooled A+B; observed rates from Center B and A+B.")
 
 # -----------------------------
 # Load artifact
@@ -39,32 +39,29 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
         "edema": int(edema),
     }
     row_df = pd.DataFrame([row])
-    # Add one-hot dummies
     for c in feature_names:
         if c.startswith("location_"):
             row_df[c] = 0
     chosen_col = f"location_{location_value}"
     if chosen_col in feature_names:
         row_df[chosen_col] = 1
-    # Ensure all features present
     for c in feature_names:
         if c not in row_df.columns:
             row_df[c] = 0
     return row_df[feature_names]
 
 # -----------------------------
-# Bin lookup (fixed version)
+# Bin lookup (safe)
 # -----------------------------
 def lookup_bins(prob, bins):
     if not bins: 
         return None
     chosen = None
     for b in bins:
-        if prob >= b["p_min"] and prob <= b["p_max"]:   # <= fixes edge issue
+        if prob >= b["p_min"] and prob <= b["p_max"]:
             chosen = b
             break
     if chosen is None:
-        # fallback: closest mean_pred
         diffs = [abs(prob - b["mean_pred"]) for b in bins]
         chosen = bins[int(np.argmin(diffs))]
     return chosen
@@ -104,8 +101,8 @@ risk_pct = 100 * p
 # -----------------------------
 # Lookup bins
 # -----------------------------
-bin_AB = lookup_bins(p, valAB.get("reliability_bins", []))  # pooled A+B for CI
-bin_B  = lookup_bins(p, valB.get("reliability_bins", []))   # external B for observed rate
+bin_AB = lookup_bins(p, valAB.get("reliability_bins", []))  # pooled A+B for CI + obs
+bin_B  = lookup_bins(p, valB.get("reliability_bins", []))   # external B for obs only
 
 # -----------------------------
 # Render results
@@ -113,17 +110,19 @@ bin_B  = lookup_bins(p, valB.get("reliability_bins", []))   # external B for obs
 st.subheader("Estimated probability of intervention within 15 years")
 
 if bin_AB:
-    st.metric(
-        label="Risk (calibrated)",
-        value=f"{risk_pct:.1f}%",
-        delta=f"95% CI {bin_AB['ci_low']*100:.1f}–{bin_AB['ci_high']*100:.1f}%"
-    )
+    ci_low = bin_AB['ci_low']*100
+    ci_high = bin_AB['ci_high']*100
+    st.write(f"**Risk: {risk_pct:.1f}% (95% CI {ci_low:.1f}–{ci_high:.1f}%)**")
 else:
-    st.metric(label="Risk (calibrated)", value=f"{risk_pct:.1f}%")
+    st.write(f"**Risk: {risk_pct:.1f}%**")
 
+# Show observed rates
 if bin_B:
     st.caption(f"External reliability (Center B): observed {bin_B['obs_rate']*100:.1f}% "
                f"(n={bin_B['n']}) in this risk band.")
+if bin_AB:
+    st.caption(f"Pooled reliability (Centers A+B): observed {bin_AB['obs_rate']*100:.1f}% "
+               f"(n={bin_AB['n']}) in this risk band.")
 
 # -----------------------------
 # Model card
@@ -134,7 +133,7 @@ with st.expander("Model card / notes"):
 - **Calibration:** Isotonic (5-fold CV)  
 - **Training:** Center A  
 - **External validation (Center B):** AUC ≈ {valB.get('auc', None):.3f}, Brier ≈ {valB.get('brier', None):.3f}  
+- **Reliability:** CI + pooled observed rate from A+B; external observed rate from B only.  
 - **Use case:** Rule-out follow-up MRI for incidental meningioma at very low risk.  
-- **Reliability:** CI shown from pooled A+B (stable), observed rate from Center B (external).  
 - **Caveats:** Out-of-distribution inputs reduce reliability; use alongside clinical judgment.
 """)
