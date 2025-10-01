@@ -3,6 +3,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+from statsmodels.stats.proportion import proportion_confint
 
 # -----------------------------
 # Config
@@ -67,6 +68,16 @@ def lookup_bins(prob, bins):
     diffs = [abs(prob - b["mean_pred"]) for b in bins]
     return bins[int(np.argmin(diffs))]
 
+def compute_bin_ci(bin_entry, alpha=0.05):
+    """Wilson CI for bin observed rate."""
+    if not bin_entry or bin_entry["n"] == 0:
+        return None
+    count = int(bin_entry["obs_rate"] * bin_entry["n"])
+    ci_low, ci_high = proportion_confint(
+        count, bin_entry["n"], alpha=alpha, method="wilson"
+    )
+    return ci_low, ci_high
+
 # -----------------------------
 # UI
 # -----------------------------
@@ -108,9 +119,10 @@ if "reliability_bins" in validation_B:
 if validation_AB and "reliability_bins" in validation_AB:
     bin_AB = lookup_bins(p, validation_AB["reliability_bins"])
     if bin_AB:
-        ci_low = bin_AB["obs_rate_ci_low"] * 100
-        ci_high = bin_AB["obs_rate_ci_high"] * 100
-        ci_txt = f"(95% CI {ci_low:.1f}–{ci_high:.1f}%)"
+        ci = compute_bin_ci(bin_AB)
+        if ci:
+            ci_low, ci_high = ci
+            ci_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
 
 # -----------------------------
 # Display
@@ -136,8 +148,8 @@ with st.expander("Model card / notes"):
     st.markdown(f"""
 - **Model:** {artifact['model_type']}
 - **External validation (B):** AUC = {validation_B['auc']:.3f}, Brier = {validation_B['brier']:.3f}  
-- **Observed reliability:** Above numbers are from calibration bins.  
-- **CI:** Based on pooled A+B observed rates (bootstrap Wilson).  
+- **Observed reliability:** External (B) and pooled (A+B) shown above.  
+- **CI:** Based on pooled A+B observed rates (Wilson method).  
 - **Use case:** Estimating risk of intervention for incidental meningioma.  
 - **Caution:** Clinical judgment required; predictions may be unstable at edges of training distribution.
 """)
