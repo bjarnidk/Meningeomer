@@ -8,7 +8,8 @@ import joblib
 # -----------------------------
 st.set_page_config(page_title="Meningioma Risk (15y intervention)", layout="wide")
 st.title("Meningioma 15-Year Intervention Risk")
-st.caption("Random Forest (isotonic calibrated). Trained on Center A, validated on Center B. Guardrails + CI from pooled A+B.")
+st.caption("Random Forest (isotonic calibrated). Trained on Center A, validated on Center B. "
+           "CIs from pooled A+B for stability; observed reliability from Center B for transparency.")
 
 # -----------------------------
 # Load artifact
@@ -38,16 +39,35 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
         "edema": int(edema),
     }
     row_df = pd.DataFrame([row])
+    # Add one-hot dummies
     for c in feature_names:
         if c.startswith("location_"):
             row_df[c] = 0
     chosen_col = f"location_{location_value}"
     if chosen_col in feature_names:
         row_df[chosen_col] = 1
+    # Ensure all features present
     for c in feature_names:
         if c not in row_df.columns:
             row_df[c] = 0
     return row_df[feature_names]
+
+# -----------------------------
+# Bin lookup (fixed version)
+# -----------------------------
+def lookup_bins(prob, bins):
+    if not bins: 
+        return None
+    chosen = None
+    for b in bins:
+        if prob >= b["p_min"] and prob <= b["p_max"]:   # <= fixes edge issue
+            chosen = b
+            break
+    if chosen is None:
+        # fallback: closest mean_pred
+        diffs = [abs(prob - b["mean_pred"]) for b in bins]
+        chosen = bins[int(np.argmin(diffs))]
+    return chosen
 
 # -----------------------------
 # UI inputs
@@ -73,33 +93,25 @@ with col3:
 # -----------------------------
 # Predict
 # -----------------------------
-row_df = make_row(age_input, size_input, sel_loc if sel_loc != "(baseline)" else "BASELINE",
-                  epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
+row_df = make_row(age_input, size_input,
+                  sel_loc if sel_loc != "(baseline)" else "BASELINE",
+                  epilepsi_in, tryk_in, focal_in, calcified_in, edema_in,
+                  feature_names)
+
 p = float(model.predict_proba(row_df)[:, 1][0])
 risk_pct = 100 * p
 
 # -----------------------------
-# Bin lookup
+# Lookup bins
 # -----------------------------
-def lookup_bins(prob, bins):
-    if not bins: return None
-    chosen = None
-    for b in bins:
-        if prob >= b["p_min"] and prob < b["p_max"]:
-            chosen = b
-            break
-    if chosen is None:
-        diffs = [abs(prob - b["mean_pred"]) for b in bins]
-        chosen = bins[int(np.argmin(diffs))]
-    return chosen
-
-bin_AB = lookup_bins(p, valAB.get("reliability_bins", []))
-bin_B  = lookup_bins(p, valB.get("reliability_bins", []))
+bin_AB = lookup_bins(p, valAB.get("reliability_bins", []))  # pooled A+B for CI
+bin_B  = lookup_bins(p, valB.get("reliability_bins", []))   # external B for observed rate
 
 # -----------------------------
-# Render
+# Render results
 # -----------------------------
 st.subheader("Estimated probability of intervention within 15 years")
+
 if bin_AB:
     st.metric(
         label="Risk (calibrated)",
