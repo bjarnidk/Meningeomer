@@ -6,7 +6,7 @@ from pathlib import Path
 
 st.set_page_config(page_title="Meningioma 15y Intervention Risk", layout="wide")
 st.title("Meningioma 15-Year Intervention Risk (Frozen Model)")
-st.caption("Random Forest with isotonic calibration. Trained on Center A (tumor size in mm); validated on Center B.")
+st.caption("Random Forest with isotonic calibration. Trained on Center A; validated on Center B.")
 
 # -----------------------------
 # Load artifact
