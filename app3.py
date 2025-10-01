@@ -8,7 +8,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(page_title="Meningioma 15y Intervention Risk", layout="wide")
 st.title("Meningioma 15-Year Intervention Risk (Frozen Model)")
-st.caption("Random Forest with isotonic calibration. Trained on Center A (tumor size in mm); validated on Center B.")
+st.caption("Random Forest with isotonic calibration. Trained on Center A (tumor size in mm); validated on Center B with bootstrap CIs.")
 
 # -----------------------------
 # Load artifact
@@ -25,9 +25,6 @@ train_ranges = artifact["train_ranges"]
 location_levels = artifact["location_levels"]
 valB = artifact["validation_B"]
 feature_importances = artifact.get("feature_importances", None)
-
-# Model expects mm
-st.info("📏 Tumor size is expected in **millimeters (mm)** — this matches the training data.")
 
 # -----------------------------
 # Sidebar: policy settings
@@ -51,19 +48,13 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
         "edema": int(edema),
     }
     row_df = pd.DataFrame([row])
-
-    # create all possible location dummies seen in training; default 0
     for c in feature_names:
         if c.startswith("location_"):
             row_df[c] = 0
-
-    # set chosen location dummy (if not baseline and exists)
     if location_value is not None and location_value != "(baseline)":
         chosen_col = f"location_{location_value}"
         if chosen_col in feature_names:
             row_df[chosen_col] = 1
-
-    # ensure all features exist & correct order
     for c in feature_names:
         if c not in row_df.columns:
             row_df[c] = 0
@@ -73,7 +64,7 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
 def tree_variance(model, row_df):
     """Compute variance across RF trees for one prediction (proxy for internal uncertainty)."""
     try:
-        rf = model.base_estimator  # RF inside calibrator
+        rf = model.base_estimator
         tree_preds = np.array([tree.predict_proba(row_df)[:, 1][0] for tree in rf.estimators_])
         return float(tree_preds.var()), float(tree_preds.std())
     except Exception:
@@ -89,7 +80,6 @@ with st.expander("Validation summary (Center B)"):
     st.write("Threshold trade-offs (Center B):")
     st.dataframe(pd.DataFrame(valB["threshold_table"]))
 
-# Optional: top features
 if feature_importances:
     st.subheader("Top features (training model importance)")
     fi = pd.Series(feature_importances).sort_values(ascending=False)
@@ -128,12 +118,21 @@ if sel_loc != "(baseline)":
         ood_msgs.append(f"Unseen location level: {sel_loc}")
 
 # -----------------------------
-# Build row & predict
+# Predict
 # -----------------------------
 row_df = make_row(age_input, size_mm, sel_loc, epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
 p = float(model.predict_proba(row_df)[:, 1][0])  # calibrated probability
 risk_pct = p * 100
 var, std = tree_variance(model, row_df)
+
+# Try to attach bootstrap CI from validation_B
+val_ci = None
+if "patient_level_ci" in valB:
+    diffs = [abs(p - row["pred"]) for row in valB["patient_level_ci"]]
+    idx = int(np.argmin(diffs))
+    ci_low = valB["patient_level_ci"][idx]["ci_low"]
+    ci_high = valB["patient_level_ci"][idx]["ci_high"]
+    val_ci = (ci_low, ci_high)
 
 # -----------------------------
 # Risk display
@@ -150,7 +149,11 @@ else:
 left, right = st.columns([1.2, 1])
 with left:
     st.subheader("Estimated probability of intervention within 15 years")
-    st.metric(label="Risk (calibrated)", value=f"{risk_pct:.1f}%")
+    if val_ci:
+        st.metric(label="Risk (calibrated)", value=f"{risk_pct:.1f}%",
+                  delta=f"95% CI {val_ci[0]*100:.1f}–{val_ci[1]*100:.1f}%")
+    else:
+        st.metric(label="Risk (calibrated)", value=f"{risk_pct:.1f}%")
     if std is not None:
         st.caption(f"Model internal uncertainty (tree std): ±{std*100:.1f}%")
     st.write(f"**Risk band:** {band}  |  **Policy t:** {policy_t:.2f}  |  **Very-low cut:** ≤ {low_risk_cut:.2f}")
@@ -201,11 +204,11 @@ with st.expander("Model card / notes"):
 - **Model:** {artifact['model_type']}
 - **Training:** Center A only (frozen). Tumor size in **mm**.
 - **External validation (Center B):** AUC ≈ {valB['auc']:.3f}, Brier ≈ {valB['brier']:.3f}
+- **Uncertainty reporting:** 
+    - 95% CI from bootstrap validation on Center B (shown above).
+    - Internal model disagreement (tree std) also shown.
+    - Calibration curve (Center B) available for reference.
 - **Variables:** age, tumorsize (mm, continuous); location (categorical); epilepsi, tryksympt, focalsympt, calcified, edema (binary).
-- **Calibration:** Isotonic (5-fold CV).
-- **Uncertainty:** 
-    - Internal model disagreement (tree std) shown per patient.
-    - Historical calibration curve from Center B included for reliability.
 - **Intended use:** Rule-out follow-up MRI when risk is very low (e.g., ≤ {low_risk_cut:.2f}). Use alongside clinical judgment.
-- **Guardrails:** OOD warnings for age/size out of range or unseen location.
+- **Guardrails:** Warnings for OOD inputs (age/size/location).
 """)
