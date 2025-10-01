@@ -116,13 +116,18 @@ if bin_AB:
 else:
     st.write(f"**Risk: {risk_pct:.1f}%**")
 
-# Show observed rates
+# Always show both observed rates if available
 if bin_B:
-    st.caption(f"External reliability (Center B): observed {bin_B['obs_rate']*100:.1f}% "
-               f"(n={bin_B['n']}) in this risk band.")
+    st.caption(
+        f"External reliability (Center B): observed {bin_B['obs_rate']*100:.1f}% "
+        f"(n={bin_B['n']}) in this risk band."
+    )
+
 if bin_AB:
-    st.caption(f"Pooled reliability (Centers A+B): observed {bin_AB['obs_rate']*100:.1f}% "
-               f"(n={bin_AB['n']}) in this risk band.")
+    st.caption(
+        f"Pooled reliability (Centers A+B): observed {bin_AB['obs_rate']*100:.1f}% "
+        f"(n={bin_AB['n']}) in this risk band."
+    )
 
 # -----------------------------
 # Model card
