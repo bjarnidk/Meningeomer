@@ -1,6 +1,3 @@
-import os
-import io
-import time
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -11,10 +8,10 @@ import joblib
 # -----------------------------
 st.set_page_config(page_title="Meningioma Risk (15y intervention)", layout="wide")
 st.title("Meningioma 15-Year Intervention Risk")
-st.caption("Random Forest (isotonic calibrated). Trained on Center A, validated on Center B. Built for rule-out decisions with guardrails.")
+st.caption("Random Forest (isotonic calibrated). Trained on Center A, validated on Center B. Guardrails + CI from pooled A+B.")
 
 # -----------------------------
-# Load model artifact
+# Load artifact
 # -----------------------------
 @st.cache_resource
 def load_artifact(path="meningioma_rf_model.joblib"):
@@ -25,9 +22,10 @@ model = artifact["calibrated_model"]
 feature_names = artifact["feature_names"]
 train_ranges = artifact["train_ranges"]
 valB = artifact.get("validation_B", {})
+valAB = artifact.get("validation_AB", {})
 
 # -----------------------------
-# Predict helper (single row)
+# Predict helper
 # -----------------------------
 def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, edema, feature_names):
     row = {
@@ -49,18 +47,17 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
     for c in feature_names:
         if c not in row_df.columns:
             row_df[c] = 0
-    row_df = row_df[feature_names]
-    return row_df
+    return row_df[feature_names]
 
 # -----------------------------
-# UI – Patient sliders / inputs
+# UI inputs
 # -----------------------------
 st.header("Interactive prediction")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    age_input = st.number_input("Age (years)", min_value=18, max_value=110, value=65, step=1)
-    size_input = st.number_input("Tumor size (mm)", min_value=1, max_value=100, value=30, step=1)
+    age_input = st.number_input("Age (years)", 18, 110, 65, 1)
+    size_input = st.number_input("Tumor size (mm)", 1, 100, 30, 1)
 
 with col2:
     loc_levels = ["(baseline)"] + artifact.get("location_levels", [])
@@ -74,78 +71,47 @@ with col3:
     edema_in      = st.selectbox("Edema", [0, 1], index=0)
 
 # -----------------------------
-# OOD guardrails
-# -----------------------------
-ood_msgs = []
-if age_input < train_ranges["age_min"] or age_input > train_ranges["age_max"]:
-    ood_msgs.append(f"Age outside training range [{train_ranges['age_min']:.0f}, {train_ranges['age_max']:.0f}]")
-if size_input < train_ranges["size_min"] or size_input > train_ranges["size_max"]:
-    ood_msgs.append(f"Tumor size outside training range [{train_ranges['size_min']:.0f}, {train_ranges['size_max']:.0f}]")
-if sel_loc != "(baseline)":
-    chosen_dummy = f"location_{sel_loc}"
-    if chosen_dummy not in feature_names:
-        ood_msgs.append(f"Unseen location level: {sel_loc}")
-
-# -----------------------------
 # Predict
 # -----------------------------
 row_df = make_row(age_input, size_input, sel_loc if sel_loc != "(baseline)" else "BASELINE",
                   epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
-
-with st.spinner("Predicting..."):
-    p = float(model.predict_proba(row_df)[:, 1][0])
-
-risk_pct = 100.0 * p
+p = float(model.predict_proba(row_df)[:, 1][0])
+risk_pct = 100 * p
 
 # -----------------------------
-# Reliability-based CI lookup
+# Bin lookup
 # -----------------------------
-val_ci = None
-val_obs = None
-val_n = None
-rel_bins = valB.get("reliability_bins", [])
-if rel_bins:
+def lookup_bins(prob, bins):
+    if not bins: return None
     chosen = None
-    for b in rel_bins:
-        if (p >= b["p_min"]) and (p < b["p_max"]):
+    for b in bins:
+        if prob >= b["p_min"] and prob < b["p_max"]:
             chosen = b
             break
     if chosen is None:
-        diffs = [abs(p - b["mean_pred"]) for b in rel_bins]
-        chosen = rel_bins[int(np.argmin(diffs))]
-    val_ci = (chosen["ci_low"], chosen["ci_high"])
-    val_obs = chosen["obs_rate"]
-    val_n   = chosen["n"]
+        diffs = [abs(prob - b["mean_pred"]) for b in bins]
+        chosen = bins[int(np.argmin(diffs))]
+    return chosen
+
+bin_AB = lookup_bins(p, valAB.get("reliability_bins", []))
+bin_B  = lookup_bins(p, valB.get("reliability_bins", []))
 
 # -----------------------------
-# Render result
+# Render
 # -----------------------------
-left, right = st.columns([1.2, 1])
-with left:
-    st.subheader("Estimated probability of intervention within 15 years")
-    if val_ci:
-        st.metric(
-            label="Risk (calibrated)",
-            value=f"{risk_pct:.1f}%",
-            delta=f"95% CI {val_ci[0]*100:.1f}–{val_ci[1]*100:.1f}%"
-        )
-        if val_obs is not None:
-            st.caption(f"External reliability: observed {val_obs*100:.1f}% (n={val_n}) in this risk band (Center B).")
-    else:
-        st.metric(label="Risk (calibrated)", value=f"{risk_pct:.1f}%")
+st.subheader("Estimated probability of intervention within 15 years")
+if bin_AB:
+    st.metric(
+        label="Risk (calibrated)",
+        value=f"{risk_pct:.1f}%",
+        delta=f"95% CI {bin_AB['ci_low']*100:.1f}–{bin_AB['ci_high']*100:.1f}%"
+    )
+else:
+    st.metric(label="Risk (calibrated)", value=f"{risk_pct:.1f}%")
 
-    if p <= 0.05 and not ood_msgs:
-        st.success("Eligible for very-low risk rule-out (≤5% and within training distribution).")
-    elif p <= 0.05 and ood_msgs:
-        st.warning("Probability is ≤5%, but inputs are outside training range. Use caution.")
-
-with right:
-    st.subheader("Input sanity / guardrails")
-    if ood_msgs:
-        for m in ood_msgs:
-            st.error("OOD: " + m)
-    else:
-        st.info("All inputs within training distribution & known categories.")
+if bin_B:
+    st.caption(f"External reliability (Center B): observed {bin_B['obs_rate']*100:.1f}% "
+               f"(n={bin_B['n']}) in this risk band.")
 
 # -----------------------------
 # Model card
@@ -156,6 +122,7 @@ with st.expander("Model card / notes"):
 - **Calibration:** Isotonic (5-fold CV)  
 - **Training:** Center A  
 - **External validation (Center B):** AUC ≈ {valB.get('auc', None):.3f}, Brier ≈ {valB.get('brier', None):.3f}  
-- **Use case:** Rule-out follow-up MRI for truly incidental meningioma when risk is very low.  
-- **Caveats:** Out-of-distribution inputs reduce reliability; practice drift requires re-calibration; use alongside clinical judgment.
+- **Use case:** Rule-out follow-up MRI for incidental meningioma at very low risk.  
+- **Reliability:** CI shown from pooled A+B (stable), observed rate from Center B (external).  
+- **Caveats:** Out-of-distribution inputs reduce reliability; use alongside clinical judgment.
 """)
