@@ -113,6 +113,20 @@ with col2:
         st.caption(f"Observed in pooled A+B: {bin_AB['obs_rate']*100:.1f}% (n={bin_AB['n']})")
 
 st.markdown("---")
-st.caption("This tool provides estimated risk of intervention within 15 years for incidental meningioma. "
-           "Center A reflects the original training dataset. Pooled A+B reflects a broader model trained on all available data. "
-           "Confidence intervals are binomial Wilson intervals around observed calibration bins.")
+st.subheader("Model notes")
+
+valB = artifact["validation_B"]
+
+st.markdown(f"""
+- **Center A model:** Trained only on Center A data.  
+   - Externally validated on **Center B** → AUC = {valB['auc']:.3f}, Brier = {valB['brier']:.3f}.  
+   - Calibration on Center B shows observed risks closely matching predicted risks.  
+
+- **Pooled model (A+B):** Trained on both Center A and B together.  
+   - Not externally validated (since both cohorts are used in training).  
+   - Provides a broader estimate that may generalize better but should be interpreted with caution.  
+
+- **Confidence intervals:** Wilson binomial 95% CI for observed risks in calibration bins.  
+- **Use case:** Support for clinical decision-making around follow-up imaging in incidental meningioma.  
+""")
+
