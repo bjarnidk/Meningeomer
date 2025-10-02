@@ -108,21 +108,21 @@ with st.spinner("Predicting..."):
 
 risk_pct = p * 100.0
 
-# -----------------------------
-# CI via pooled bins
-# -----------------------------
+# CI via A-validation bins only
 ci_txt = ""
 bin_B, bin_AB = None, None
 
 if "reliability_bins" in validation_B:
     bin_B = lookup_bins(p, validation_B["reliability_bins"])
-if validation_AB and "reliability_bins" in validation_AB:
-    bin_AB = lookup_bins(p, validation_AB["reliability_bins"])
-    if bin_AB:
-        ci = compute_bin_ci(bin_AB)
+    if bin_B:
+        ci = compute_bin_ci(bin_B)  # CI from B (external validation, based on A-trained model)
         if ci:
             ci_low, ci_high = ci
             ci_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
+
+if validation_AB and "reliability_bins" in validation_AB:
+    bin_AB = lookup_bins(p, validation_AB["reliability_bins"])
+
 
 # -----------------------------
 # Display
