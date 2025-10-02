@@ -12,17 +12,26 @@ artifact = joblib.load(ARTIFACT_PATH)
 model_A = artifact["calibrated_model_A"]
 model_AB = artifact["calibrated_model_AB"]
 feature_names = artifact["feature_names"]
-train_ranges = artifact["train_ranges"]
+
+# -----------------------------
+# Location mapping
+# -----------------------------
+location_map = {
+    0: "infratentorial",
+    1: "supratentorial",
+    2: "skullbase",
+    3: "convexity"
+}
 
 # -----------------------------
 # Helper to build feature row
 # -----------------------------
-def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, edema, feature_names):
+def make_row(age, size_mm, location_code, epilepsy, ich_sympt, focal, calcified, edema, feature_names):
     row = {
         "age": age,
         "tumorsize": size_mm,   # stored in mm
-        "epilepsi": int(epilepsi),
-        "tryksympt": int(tryk),
+        "epilepsi": int(epilepsy),
+        "tryksympt": int(ich_sympt),
         "focalsympt": int(focal),
         "calcified": int(calcified),
         "edema": int(edema),
@@ -32,7 +41,7 @@ def make_row(age, size_mm, location_value, epilepsi, tryk, focal, calcified, ede
     for c in feature_names:
         if c.startswith("location_"):
             row_df[c] = 0
-    chosen_col = f"location_{location_value}"
+    chosen_col = f"location_{location_map[location_code]}"
     if chosen_col in feature_names:
         row_df[chosen_col] = 1
     for c in feature_names:
@@ -58,17 +67,21 @@ st.title("Meningioma 15-Year Intervention Risk")
 st.sidebar.header("Patient inputs")
 age_input = st.sidebar.number_input("Age (years)", 18, 110, 65)
 size_input = st.sidebar.number_input("Tumor size (mm)", 1, 100, 30)
-sel_loc = st.sidebar.text_input("Location (exact string from training data)", "frontal")
-epilepsi_in = st.sidebar.selectbox("Epilepsi", [0, 1], index=0)
-tryk_in = st.sidebar.selectbox("Tryksympt", [0, 1], index=0)
-focal_in = st.sidebar.selectbox("Focalsympt", [0, 1], index=0)
-calcified_in = st.sidebar.selectbox("Calcified", [0, 1], index=1)
-edema_in = st.sidebar.selectbox("Edema", [0, 1], index=0)
+
+# Updated names
+sel_loc_code = st.sidebar.selectbox("Location", options=list(location_map.keys()), 
+                                    format_func=lambda x: {0:"Infratentorial",1:"Supratentorial",2:"Skull base",3:"Convexity"}[x])
+
+epilepsy_in = st.sidebar.selectbox("Epilepsy", [0, 1], index=0)
+ich_in      = st.sidebar.selectbox("Intracranial Hypertension Symptoms", [0, 1], index=0)
+focal_in    = st.sidebar.selectbox("Focal Neurologic Symptoms", [0, 1], index=0)
+calcified_in= st.sidebar.selectbox(">50% of tumor calcified", [0, 1], index=1)
+edema_in    = st.sidebar.selectbox("Edema", [0, 1], index=0)
 
 # -----------------------------
 # Prediction
 # -----------------------------
-row_df = make_row(age_input, size_input, sel_loc, epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
+row_df = make_row(age_input, size_input, sel_loc_code, epilepsy_in, ich_in, focal_in, calcified_in, edema_in, feature_names)
 
 p_A = float(model_A.predict_proba(row_df)[0, 1])
 p_AB = float(model_AB.predict_proba(row_df)[0, 1])
