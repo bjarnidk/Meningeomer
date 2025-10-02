@@ -104,36 +104,51 @@ row_df = make_row(age_input, size_input, sel_loc if sel_loc != "(baseline)" else
 
 # Predict
 with st.spinner("Predicting..."):
-    p = float(model.predict_proba(row_df)[:, 1][0])
+# --- Predictions ---
+p = float(model.predict_proba(row_df)[:, 1])
 
-risk_pct = p * 100.0
+# --- CI from A ---
+ci_A_txt, ci_AB_txt = "", ""
+risk_A, risk_AB = None, None
 
-# reliability bins
 if "validation_A" in artifact and "reliability_bins" in artifact["validation_A"]:
     bin_A = lookup_bins(p, artifact["validation_A"]["reliability_bins"])
     if bin_A:
+        risk_A = p * 100
         ci_low, ci_high = bin_A["ci_low"], bin_A["ci_high"]
-        ci_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
+        ci_A_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
+        obs_A = f"Observed in A: {bin_A['obs_rate']*100:.1f}% (n={bin_A['n']})"
+    else:
+        obs_A = None
+else:
+    obs_A = None
 
+# --- CI from pooled AB ---
+if "validation_AB" in artifact and "reliability_bins" in artifact["validation_AB"]:
+    bin_AB = lookup_bins(p, artifact["validation_AB"]["reliability_bins"])
+    if bin_AB:
+        risk_AB = p * 100
+        ci_low, ci_high = bin_AB["ci_low"], bin_AB["ci_high"]
+        ci_AB_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
+        obs_AB = f"Observed in pooled A+B: {bin_AB['obs_rate']*100:.1f}% (n={bin_AB['n']})"
+    else:
+        obs_AB = None
+else:
+    obs_AB = None
 
+# --- Display ---
+st.subheader("Predicted probability of intervention (15 years)")
 
+col1, col2 = st.columns(2)
+with col1:
+    if risk_A is not None:
+        st.metric("Center A", f"{risk_A:.1f}% {ci_A_txt}")
+        if obs_A: st.caption(obs_A)
+with col2:
+    if risk_AB is not None:
+        st.metric("Pooled A+B", f"{risk_AB:.1f}% {ci_AB_txt}")
+        if obs_AB: st.caption(obs_AB)
 
-# -----------------------------
-# Display
-# -----------------------------
-st.subheader("Estimated probability of intervention within 15 years")
-st.metric(label="Risk", value=f"{risk_pct:.1f}% {ci_txt}")
-
-if bin_B:
-    st.caption(
-        f"Observed in Center B: {bin_B['obs_rate']*100:.1f}% "
-        f"(n={bin_B['n']}) in this risk band."
-    )
-if bin_AB:
-    st.caption(
-        f"Observed in pooled A+B: {bin_AB['obs_rate']*100:.1f}% "
-        f"(n={bin_AB['n']}) in this risk band."
-    )
 
 # -----------------------------
 # Model card
