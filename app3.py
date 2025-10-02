@@ -113,20 +113,28 @@ with col2:
         st.caption(f"Observed in pooled A+B: {bin_AB['obs_rate']*100:.1f}% (n={bin_AB['n']})")
 
 st.markdown("---")
-st.subheader("Model notes")
+st.subheader("Model description and interpretation")
 
 valB = artifact["validation_B"]
 
 st.markdown(f"""
-- **Center A model:** Trained only on Center A data.  
-   - Externally validated on **Center B** → AUC = {valB['auc']:.3f}, Brier = {valB['brier']:.3f}.  
-   - Calibration on Center B shows observed risks closely matching predicted risks.  
+The prediction tool is based on a Random Forest classifier with isotonic calibration. 
+Two versions of the model are provided: one trained exclusively on patients from Center A, and one trained on the pooled cohort from Centers A and B. 
+The Center A model is the primary reference, as it has been externally validated on an independent dataset from Center B. 
+In this validation, the model achieved an AUC of {valB['auc']:.3f} and a Brier score of {valB['brier']:.3f}, indicating good discriminative performance and overall calibration.
 
-- **Pooled model (A+B):** Trained on both Center A and B together.  
-   - Not externally validated (since both cohorts are used in training).  
-   - Provides a broader estimate that may generalize better but should be interpreted with caution.  
+Model calibration was assessed by dividing predictions into ten probability bins of equal size. 
+Within each bin, the mean predicted probability of intervention was compared with the observed proportion of patients who underwent surgery. 
+Ninety-five percent confidence intervals for these observed proportions were calculated using Wilson’s binomial method. 
+The width of these intervals reflects the number of patients available in each bin; wider intervals occur where the number of patients is limited.
 
-- **Confidence intervals:** Wilson binomial 95% CI for observed risks in calibration bins.  
-- **Use case:** Support for clinical decision-making around follow-up imaging in incidental meningioma.  
+For an individual patient, the model outputs a predicted probability of intervention within 15 years. 
+This probability should be interpreted alongside the 95% confidence interval, which reflects uncertainty in the calibration of the model within the relevant probability range. 
+The application also reports the observed event rate among patients in the validation cohort who fell within the same predicted risk range, thereby grounding the estimate in empirical outcomes. 
+
+The pooled model trained on Centers A and B is presented as a supplementary reference. 
+While it incorporates a larger sample size and may generalize better to mixed populations, it does not have an independent external validation and should therefore be interpreted with more caution. 
+In all cases, the estimates provided by this tool are intended to support—but not replace—clinical judgment in decision-making regarding follow-up of incidental meningioma.
 """)
+
 
