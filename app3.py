@@ -68,15 +68,21 @@ st.sidebar.header("Patient inputs")
 age_input = st.sidebar.number_input("Age (years)", 18, 110, 65)
 size_input = st.sidebar.number_input("Tumor size (mm)", 1, 100, 30)
 
-# Updated names
-sel_loc_code = st.sidebar.selectbox("Location", options=list(location_map.keys()), 
-                                    format_func=lambda x: {0:"Infratentorial",1:"Supratentorial",2:"Skull base",3:"Convexity"}[x])
+# Location dropdown
+sel_loc_code = st.sidebar.selectbox(
+    "Location",
+    options=list(location_map.keys()),
+    format_func=lambda x: {0:"Infratentorial",1:"Supratentorial",2:"Skull base",3:"Convexity"}[x]
+)
 
-epilepsy_in = st.sidebar.selectbox("Epilepsy", [0, 1], index=0)
-ich_in      = st.sidebar.selectbox("Intracranial Hypertension Symptoms", [0, 1], index=0)
-focal_in    = st.sidebar.selectbox("Focal Neurologic Symptoms", [0, 1], index=0)
-calcified_in= st.sidebar.selectbox(">50% of tumor calcified", [0, 1], index=1)
-edema_in    = st.sidebar.selectbox("Edema", [0, 1], index=0)
+# Dichotomous variables (0=No, 1=Yes)
+yes_no = {0: "No", 1: "Yes"}
+
+epilepsy_in  = st.sidebar.selectbox("Epilepsy", [0,1], format_func=lambda x: yes_no[x])
+ich_in       = st.sidebar.selectbox("Intracranial Hypertension Symptoms", [0,1], format_func=lambda x: yes_no[x])
+focal_in     = st.sidebar.selectbox("Focal Neurologic Symptoms", [0,1], format_func=lambda x: yes_no[x])
+calcified_in = st.sidebar.selectbox(">50% of tumor calcified", [0,1], format_func=lambda x: yes_no[x], index=1)
+edema_in     = st.sidebar.selectbox("Edema", [0,1], format_func=lambda x: yes_no[x])
 
 # -----------------------------
 # Prediction
