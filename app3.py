@@ -118,23 +118,19 @@ st.subheader("Model description and interpretation")
 valB = artifact["validation_B"]
 
 st.markdown(f"""
-The prediction tool is based on a Random Forest classifier with isotonic calibration. 
-Two versions of the model are provided: one trained exclusively on patients from Center A, and one trained on the pooled cohort from Centers A and B. 
-The Center A model is the primary reference, as it has been externally validated on an independent dataset from Center B. 
-In this validation, the model achieved an AUC of {valB['auc']:.3f} and a Brier score of {valB['brier']:.3f}, indicating good discriminative performance and overall calibration.
+This tool is based on a Random Forest classifier with isotonic calibration. 
+The primary model was trained on **507 patients** from Center A and externally validated on **110 patients** from Center B, 
+where it achieved an AUC of {valB['auc']:.3f} and a Brier score of {valB['brier']:.3f}. 
 
-Model calibration was assessed by dividing predictions into ten probability bins of equal size. 
-Within each bin, the mean predicted probability of intervention was compared with the observed proportion of patients who underwent surgery. 
-Ninety-five percent confidence intervals for these observed proportions were calculated using Wilson’s binomial method. 
-The width of these intervals reflects the number of patients available in each bin; wider intervals occur where the number of patients is limited.
+Calibration was assessed by grouping patients into ten probability bins. 
+Within each bin, predicted risks were compared to observed intervention rates, 
+and 95% confidence intervals were calculated using Wilson’s method. 
+The width of these intervals reflects the number of patients contributing to each bin. 
 
-For an individual patient, the model outputs a predicted probability of intervention within 15 years. 
-This probability should be interpreted alongside the 95% confidence interval, which reflects uncertainty in the calibration of the model within the relevant probability range. 
-The application also reports the observed event rate among patients in the validation cohort who fell within the same predicted risk range, thereby grounding the estimate in empirical outcomes. 
-
-The pooled model trained on Centers A and B is presented as a supplementary reference. 
-While it incorporates a larger sample size and may generalize better to mixed populations, it does not have an independent external validation and should therefore be interpreted with more caution. 
-In all cases, the estimates provided by this tool are intended to support—but not replace—clinical judgment in decision-making regarding follow-up of incidental meningioma.
+For each patient entered, the app displays the predicted probability of intervention within 15 years, 
+the corresponding confidence interval based on calibration, 
+and the observed event rates from validation patients in the same risk range. 
+A pooled model trained on **617 patients** from Centers A and B is also shown, but it does not have independent external validation.
 """)
 
 
