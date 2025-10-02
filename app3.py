@@ -108,22 +108,13 @@ with st.spinner("Predicting..."):
 
 risk_pct = p * 100.0
 
-# CI via A bins only
-ci_txt = ""
-bin_A, bin_B, bin_AB = None, None, None
-
+# reliability bins
 if "validation_A" in artifact and "reliability_bins" in artifact["validation_A"]:
     bin_A = lookup_bins(p, artifact["validation_A"]["reliability_bins"])
     if bin_A:
-        ci = compute_bin_ci(bin_A)  # CI always from A
-        if ci:
-            ci_low, ci_high = ci
-            ci_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
+        ci_low, ci_high = bin_A["ci_low"], bin_A["ci_high"]
+        ci_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
 
-if "reliability_bins" in validation_B:
-    bin_B = lookup_bins(p, validation_B["reliability_bins"])
-if validation_AB and "reliability_bins" in validation_AB:
-    bin_AB = lookup_bins(p, validation_AB["reliability_bins"])
 
 
 
