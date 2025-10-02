@@ -3,7 +3,6 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
-from statsmodels.stats.proportion import proportion_confint
 
 # -----------------------------
 # Config
@@ -22,9 +21,9 @@ def load_artifact(path):
 artifact = load_artifact(ARTIFACT_PATH)
 model = artifact["calibrated_model"]
 feature_names = artifact["feature_names"]
-train_ranges = artifact["train_ranges"]
 
-validation_B = artifact["validation_B"]
+validation_A = artifact.get("validation_A", None)
+validation_B = artifact.get("validation_B", None)
 validation_AB = artifact.get("validation_AB", None)
 
 # -----------------------------
@@ -61,28 +60,18 @@ def lookup_bins(prob, bins):
         if i < len(bins) - 1:
             if prob >= b["p_min"] and prob < b["p_max"]:
                 return b
-        else:  # last bin, inclusive
+        else:  # last bin inclusive
             if prob >= b["p_min"] and prob <= b["p_max"]:
                 return b
     # fallback: closest mean_pred
     diffs = [abs(prob - b["mean_pred"]) for b in bins]
     return bins[int(np.argmin(diffs))]
 
-def compute_bin_ci(bin_entry, alpha=0.05):
-    """Wilson CI for bin observed rate."""
-    if not bin_entry or bin_entry["n"] == 0:
-        return None
-    count = int(bin_entry["obs_rate"] * bin_entry["n"])
-    ci_low, ci_high = proportion_confint(
-        count, bin_entry["n"], alpha=alpha, method="wilson"
-    )
-    return ci_low, ci_high
-
 # -----------------------------
 # UI
 # -----------------------------
 st.title("Meningioma 15-Year Intervention Risk")
-st.caption("Random Forest (isotonic calibrated). Trained on Center A, validated on Center B. Risk is probability of intervention within 15 years.")
+st.caption("Random Forest (isotonic calibrated). Shows predictions from Center A training and pooled A+B data.")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -102,42 +91,38 @@ with col2:
 row_df = make_row(age_input, size_input, sel_loc if sel_loc != "(baseline)" else "BASELINE",
                   epilepsi_in, tryk_in, focal_in, calcified_in, edema_in, feature_names)
 
-# Predict
+# Predict probability
 with st.spinner("Predicting..."):
-# --- Predictions ---
-p = float(model.predict_proba(row_df)[:, 1])
+    p = float(model.predict_proba(row_df)[:, 1])  # probability of intervention
+    risk_pct = p * 100.0
 
-# --- CI from A ---
+# -----------------------------
+# Get bins and CIs
+# -----------------------------
 ci_A_txt, ci_AB_txt = "", ""
 risk_A, risk_AB = None, None
+obs_A, obs_AB = None, None
 
-if "validation_A" in artifact and "reliability_bins" in artifact["validation_A"]:
-    bin_A = lookup_bins(p, artifact["validation_A"]["reliability_bins"])
+# --- Center A prediction ---
+if validation_A and "reliability_bins" in validation_A:
+    bin_A = lookup_bins(p, validation_A["reliability_bins"])
     if bin_A:
-        risk_A = p * 100
-        ci_low, ci_high = bin_A["ci_low"], bin_A["ci_high"]
-        ci_A_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
+        risk_A = risk_pct
+        ci_A_txt = f"(95% CI {bin_A['ci_low']*100:.1f}–{bin_A['ci_high']*100:.1f}%)"
         obs_A = f"Observed in A: {bin_A['obs_rate']*100:.1f}% (n={bin_A['n']})"
-    else:
-        obs_A = None
-else:
-    obs_A = None
 
-# --- CI from pooled AB ---
-if "validation_AB" in artifact and "reliability_bins" in artifact["validation_AB"]:
-    bin_AB = lookup_bins(p, artifact["validation_AB"]["reliability_bins"])
+# --- Pooled A+B prediction ---
+if validation_AB and "reliability_bins" in validation_AB:
+    bin_AB = lookup_bins(p, validation_AB["reliability_bins"])
     if bin_AB:
-        risk_AB = p * 100
-        ci_low, ci_high = bin_AB["ci_low"], bin_AB["ci_high"]
-        ci_AB_txt = f"(95% CI {ci_low*100:.1f}–{ci_high*100:.1f}%)"
+        risk_AB = risk_pct
+        ci_AB_txt = f"(95% CI {bin_AB['ci_low']*100:.1f}–{bin_AB['ci_high']*100:.1f}%)"
         obs_AB = f"Observed in pooled A+B: {bin_AB['obs_rate']*100:.1f}% (n={bin_AB['n']})"
-    else:
-        obs_AB = None
-else:
-    obs_AB = None
 
-# --- Display ---
-st.subheader("Predicted probability of intervention (15 years)")
+# -----------------------------
+# Display
+# -----------------------------
+st.subheader("Predicted probability of intervention within 15 years")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -149,16 +134,15 @@ with col2:
         st.metric("Pooled A+B", f"{risk_AB:.1f}% {ci_AB_txt}")
         if obs_AB: st.caption(obs_AB)
 
-
 # -----------------------------
 # Model card
 # -----------------------------
 with st.expander("Model card / notes"):
     st.markdown(f"""
 - **Model:** {artifact['model_type']}
-- **External validation (B):** AUC = {validation_B['auc']:.3f}, Brier = {validation_B['brier']:.3f}  
-- **Observed reliability:** External (B) and pooled (A+B) shown above.  
-- **CI:** Based on pooled A+B observed rates (Wilson method).  
+- **Validation (Center B):** AUC = {validation_B['auc']:.3f}, Brier = {validation_B['brier']:.3f}  
+- **Observed reliability:** Predictions shown separately for Center A and pooled A+B.  
+- **CI:** Based on Wilson intervals within calibration bins.  
 - **Use case:** Estimating risk of intervention for incidental meningioma.  
-- **Caution:** Clinical judgment required; predictions may be unstable at edges of training distribution.
+- **Caution:** Clinical judgment required; small n in some bins → wide CI.
 """)
